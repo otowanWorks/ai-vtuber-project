@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>Simple AI VTuber Chat</title>
+    <style>
+        html,
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-size: cover;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
+            color: #FFFFFF;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        div.aiResponseBox {
+            position: absolute;
+            top: 10%;
+            width: 70%;
+            right: 5%;
+            left: 5%;
+            max-height: 40%;
+            overflow-y: auto;
+        }
+
+        div.bottomBox {
+            position: absolute;
+            bottom: 5%;
+            width: 90%;
+            left: 5%;
+            right: 5%;
+        }
+
+        div {
+            text-align: center;
+        }
+
+        .ai-response {
+            font-size: 1.8rem;
+            font-weight: 600;
+            line-height: 1.4em;
+            padding: 20px;
+            background-color: rgba(0, 0, 0, 0.7);
+            border-radius: 15px;
+            margin: 10px 0;
+            word-wrap: break-word;
+            text-align: left;
+        }
+
+        #userComment {
+            text-align: center;
+            font-size: 1.2rem;
+            margin: 1rem 0;
+            padding: 10px;
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            word-wrap: break-word;
+        }
+
+        #vtuber {
+            position: absolute;
+            bottom: -3%;
+            right: 15%;
+            width: 300px;
+            text-align: right;
+        }
+
+        #charaImg {
+            width: 100%;
+            height: auto;
+            max-height: 400px;
+            object-fit: contain;
+        }
+
+        #submit_form {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            border-radius: 15px;
+        }
+
+        #utterance {
+            flex: 1;
+            padding: 15px;
+            font-size: 1.1rem;
+            border: none;
+            border-radius: 10px;
+            background-color: rgba(255, 255, 255, 0.9);
+            color: #333;
+            outline: none;
+        }
+
+        #sendButton {
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        #sendButton:hover {
+            background: linear-gradient(45deg, #ee5a52, #ff6b6b);
+            transform: translateY(-2px);
+        }
+
+        #sendButton:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes blink {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* レスポンシブ対応 */
+        @media (max-width: 768px) {
+            .ai-response {
+                font-size: 1.4rem;
+                padding: 15px;
+            }
+            
+            #userComment {
+                font-size: 1rem;
+            }
+            
+            #vtuber {
+                width: 200px;
+                right: 5%;
+            }
+            
+            #submit_form {
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            #utterance {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="vtuber">
+        <img id="charaImg" src="https://via.placeholder.com/300x400/9b59b6/ffffff?text=AI+VTuber" alt="AI VTuber Character" />
+    </div>
+    
+    <div id="aiResponse" class="aiResponseBox">
+        <div class="ai-response" id="aiResponseUtterance">
+            こんにちは！何か話しかけてくださいね 😊
+        </div>
+    </div>
+    
+    <div class="bottomBox">
+        <div id="userComment"></div>
+        <div id="submit_form">
+            <input type="text" id="utterance" placeholder="メッセージを入力してください..." />
+            <button id="sendButton" onclick="onClickSend();">送信</button>
+        </div>
+    </div>
+
+    <script>
+        // VTuberが応答を考え中であるかどうか
+        var isThinking = false;
+        // ライブごとに設定する識別子
+        var LIVE_OWNER_ID = createUuid();
+
+        // タイプライター効果
+        const startTyping = (param) => {
+            let el = document.querySelector(param.el);
+            el.textContent = "";
+            let speed = param.speed;
+            let string = param.string.split("");
+            string.forEach((char, index) => {
+                setTimeout(() => {
+                    el.textContent += char;
+                }, speed * index);
+            });
+        };
+
+        // MEBO APIからレスポンスを取得（Vercelのサーバーレス関数経由）
+        async function getMeboResponse(utterance, username, uid) {
+            const requestBody = {
+                utterance: utterance,
+                username: username,
+                uid: uid
+            };
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const content = await response.json();
+                return content.response;
+            } catch (error) {
+                console.error('API Error:', error);
+                return 'すみません、少し調子が悪いみたいです。もう一度試してくださいね。';
+            }
+        }
+
+        // コメントを処理する
+        const handleComment = async (comment, username) => {
+            if (isThinking) return; // 処理中の場合は無視
+            
+            isThinking = true;
+            const sendButton = document.getElementById('sendButton');
+            const userCommentElement = document.querySelector("#userComment");
+            
+            // UI更新
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<div class="loading"></div>';
+            userCommentElement.textContent = username + ": " + comment;
+            
+            // 思考中の表示
+            startTyping({
+                el: "#aiResponseUtterance",
+                string: "考え中...",
+                speed: 100
+            });
+            
+            try {
+                // AI応答を取得
+                const response = await getMeboResponse(comment, username, LIVE_OWNER_ID);
+                
+                // レスポンスを表示
+                startTyping({
+                    el: "#aiResponseUtterance",
+                    string: response,
+                    speed: 50
+                });
+            } catch (error) {
+                console.error('Error handling comment:', error);
+                document.querySelector("#aiResponseUtterance").textContent = 'エラーが発生しました。もう一度お試しください。';
+            } finally {
+                // UI復旧
+                isThinking = false;
+                sendButton.disabled = false;
+                sendButton.textContent = '送信';
+            }
+        }
+
+        // 送信ボタンクリック時の処理
+        const onClickSend = () => {
+            const utteranceInput = document.querySelector("#utterance");
+            const message = utteranceInput.value.trim();
+            
+            if (message === '' || isThinking) return;
+            
+            handleComment(message, 'あなた');
+            utteranceInput.value = "";
+        }
+
+        // Enterキーでの送信対応
+        document.addEventListener('DOMContentLoaded', function() {
+            const utteranceInput = document.querySelector("#utterance");
+            utteranceInput.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    onClickSend();
+                }
+            });
+            
+            // 初期フォーカス
+            utteranceInput.focus();
+        });
+
+        // まばたき機能（プレースホルダー画像用）
+        const img = [
+            "https://via.placeholder.com/300x400/9b59b6/ffffff?text=AI+VTuber",
+            "https://via.placeholder.com/300x400/8e44ad/ffffff?text=AI+VTuber+😊"
+        ];
+        var isBlinking = false;
+
+        function blink() {
+            const charaImg = document.getElementById("charaImg");
+            if (charaImg) {
+                if (isBlinking) {
+                    isBlinking = false;
+                    charaImg.src = img[1];
+                    setTimeout(blink, 150);
+                } else {
+                    isBlinking = true;
+                    charaImg.src = img[0];
+                    setTimeout(blink, 3500);
+                }
+            }
+        }
+
+        // UUID生成
+        function createUuid() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (a) {
+                let r = (new Date().getTime() + Math.random() * 16) % 16 | 0, v = a == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        // ページ読み込み時にまばたき開始
+        window.addEventListener('load', function() {
+            blink();
+        });
+    </script>
+</body>
+
+</html>
